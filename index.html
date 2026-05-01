@@ -302,6 +302,38 @@
     .eb { color: var(--red); }
     .em { color: var(--text-mid); }
 
+    /* ── RECOMMEND BUTTON ── */
+    .rec-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-top: 8px;
+      padding: 7px 12px;
+      background: var(--amber-glow);
+      border: 1px solid var(--amber-dim);
+      border-radius: 6px;
+      color: var(--amber);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 0.15s;
+    }
+    .rec-btn:active { background: var(--amber-glow2); }
+    .rec-result {
+      display: none;
+      margin-top: 7px;
+      padding: 9px 11px;
+      background: var(--surface2);
+      border: 1px solid var(--amber-dim);
+      border-radius: 6px;
+      font-size: 11px;
+      color: var(--text-mid);
+      line-height: 1.65;
+    }
+    .rec-result strong { color: var(--amber); font-size: 13px; }
+    .rec-result.show { display: block; }
+
     /* ── STICKY BAR ── */
     .bar {
       position: fixed;
@@ -366,6 +398,8 @@
         <span class="sv" id="kwpv">6 kWp</span>
       </div>
       <div class="chip" id="sysHint">≈ 15 панелей × 400 Вт · потрібно ≈ 30 м² даху</div>
+      <button class="rec-btn" onclick="recommendKWp()">📐 Розрахувати рекомендовану потужність</button>
+      <div class="rec-result" id="kwpRec"></div>
     </div>
     <div class="field">
       <div class="fl">Орієнтація даху</div>
@@ -429,6 +463,8 @@
           <span class="sv" id="bkwhv">10 кВт·год</span>
         </div>
         <div class="chip">Для будинку з ~4500 кВт·год/рік — оптимально 8–12 кВт·год</div>
+        <button class="rec-btn" onclick="recommendBat()">📐 Розрахувати рекомендовану ємність</button>
+        <div class="rec-result" id="batRec"></div>
       </div>
     </div>
   </div>
@@ -914,6 +950,75 @@ function drawChart(r) {
     <text x="${sx(midY).toFixed(1)}" y="${H - 8}" text-anchor="middle" fill="#6a6460" font-size="8" font-family="JetBrains Mono">р.${midY + 1}</text>
     <text x="${sx(r.flows.length - 1).toFixed(1)}" y="${H - 8}" text-anchor="middle" fill="#6a6460" font-size="8" font-family="JetBrains Mono">р.${r.sysLife}</text>
   `;
+}
+
+// ── RECOMMEND kWp ──
+function recommendKWp() {
+  const consumption  = num('consumption', 4500);
+  const orientFactor = ORIENT[g('orient').value] || 1.0;
+  // Target: cover ~70% of annual consumption
+  // More than 70% quickly hits diminishing returns in Ireland (low export rate)
+  const targetCoverage = 0.70;
+  const raw = (consumption * targetCoverage) / (BASE_YIELD * orientFactor);
+  const recommended = Math.min(20, Math.max(1, Math.round(raw * 2) / 2)); // round to 0.5
+
+  // Apply to slider
+  g('sysKWp').value = recommended;
+  sv('sysKWp', 'kwpv', ' kWp');
+  updateSystemHint();
+  calc();
+
+  const panels = Math.round(recommended / 0.4);
+  const area   = Math.round(panels * 1.8);
+  const genEst = Math.round(recommended * BASE_YIELD * orientFactor);
+  const covPct = Math.round(genEst / consumption * 100);
+
+  const el = g('kwpRec');
+  el.innerHTML = `<strong>${recommended} kWp</strong> — для покриття ~70% споживання<br>
+Прогнозна генерація: ~${genEst.toLocaleString('uk-UA')} кВт·год/рік (${covPct}% від вашого споживання)<br>
+≈ ${panels} панелей · ~${area} м² даху<br>
+<span style="color:var(--text-dim)">Покриття 70% — баланс між самоспоживанням і надлишковим експортом за низьким тарифом. Якщо є EV або тепловий насос — можна збільшити.</span>`;
+  el.classList.add('show');
+
+  if (navigator.vibrate) navigator.vibrate(30);
+}
+
+// ── RECOMMEND BATTERY ──
+function recommendBat() {
+  const consumption   = num('consumption', 4500);
+  const daylightFrac  = num('daylightFrac', 35) / 100;
+  const kWp           = num('sysKWp', 6);
+  const orientFactor  = ORIENT[g('orient').value] || 1.0;
+
+  const annualGen     = kWp * BASE_YIELD * orientFactor;
+  const dailyGen      = annualGen / 365;
+  const daytimeDemand = (consumption * daylightFrac) / 365;
+  const dailyExcess   = Math.max(0, dailyGen - daytimeDemand);  // gen not self-consumed during day
+  const eveningDemand = (consumption * (1 - daylightFrac)) / 365; // what we need after sunset
+
+  // Battery should cover the lesser of: what we have to store vs what we need in evening
+  // +15% buffer for round-trip losses and degradation
+  const rawBat  = Math.min(dailyExcess, eveningDemand) * 1.15;
+  const recommended = Math.min(30, Math.max(2, Math.round(rawBat)));
+
+  // Apply to slider
+  g('batKWh').value = recommended;
+  sv('batKWh', 'bkwhv', ' кВт·год');
+  calc();
+
+  const excessPct  = Math.round(dailyExcess * 10) / 10;
+  const evenPct    = Math.round(eveningDemand * 10) / 10;
+  const covEven    = Math.min(100, Math.round(recommended / eveningDemand * 100));
+
+  const el = g('batRec');
+  el.innerHTML = `<strong>${recommended} кВт·год</strong> — під вашу систему ${kWp} kWp<br>
+Денний надлишок генерації: ~${excessPct} кВт·год/день<br>
+Вечірнє споживання: ~${evenPct} кВт·год/день<br>
+Батарея покриє ~${covEven}% вечірнього споживання<br>
+<span style="color:var(--text-dim)">Більша батарея не дасть пропорційної вигоди — вона буде заряджатись не повністю.</span>`;
+  el.classList.add('show');
+
+  if (navigator.vibrate) navigator.vibrate(30);
 }
 
 // ── SW REGISTRATION ──
