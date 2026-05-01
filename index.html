@@ -954,15 +954,33 @@ function drawChart(r) {
 
 // ── RECOMMEND kWp ──
 function recommendKWp() {
-  const consumption  = num('consumption', 4500);
-  const orientFactor = ORIENT[g('orient').value] || 1.0;
-  // Target: cover ~70% of annual consumption
-  // More than 70% quickly hits diminishing returns in Ireland (low export rate)
-  const targetCoverage = 0.70;
-  const raw = (consumption * targetCoverage) / (BASE_YIELD * orientFactor);
-  const recommended = Math.min(20, Math.max(1, Math.round(raw * 2) / 2)); // round to 0.5
+  const consumption   = num('consumption', 4500);
+  const daylightFrac  = num('daylightFrac', 35) / 100;
+  const orientFactor  = ORIENT[g('orient').value] || 1.0;
+  const hasBat        = g('hasBattery').checked;
+  const batKWh        = num('batKWh', 10);
+  const buyPrice      = num('buyPrice', 0.38);
+  const expPrice      = num('expPrice', 0.18);
 
-  // Apply to slider
+  // Денне споживання — те що можна покрити напряму генерацією
+  const daytimeDemand = consumption * daylightFrac;
+
+  // Без батареї: оптимум — генерація ≈ денному споживанню.
+  // Все понад іде в мережу за expPrice (вдвічі менше) — окупається повільніше.
+  // З батареєю: можна генерувати більше, бо надлишок зберігається і дається ввечері.
+  let optimalGen;
+  if (hasBat) {
+    const eveningDemand   = consumption * (1 - daylightFrac);
+    const batYearCapacity = batKWh * 365 * 0.92;
+    const extraAbsorb     = Math.min(eveningDemand, batYearCapacity);
+    optimalGen = daytimeDemand + extraAbsorb * 0.85;
+  } else {
+    optimalGen = daytimeDemand;
+  }
+
+  const rawKWp      = optimalGen / (BASE_YIELD * orientFactor);
+  const recommended = Math.min(20, Math.max(1, Math.round(rawKWp * 2) / 2));
+
   g('sysKWp').value = recommended;
   sv('sysKWp', 'kwpv', ' kWp');
   updateSystemHint();
@@ -972,12 +990,18 @@ function recommendKWp() {
   const area   = Math.round(panels * 1.8);
   const genEst = Math.round(recommended * BASE_YIELD * orientFactor);
   const covPct = Math.round(genEst / consumption * 100);
+  const dayPct = Math.round(daylightFrac * 100);
+
+  const batNote = hasBat
+    ? `З батареєю враховано вечірнє споживання — тому рекомендація вища.`
+    : `Без батареї генерація понад денне споживання іде в мережу за €${expPrice.toFixed(2)} (vs купівля €${buyPrice.toFixed(2)}) — невигідно. Додайте батарею щоб збільшити оптимальний розмір системи.`;
 
   const el = g('kwpRec');
-  el.innerHTML = `<strong>${recommended} kWp</strong> — для покриття ~70% споживання<br>
-Прогнозна генерація: ~${genEst.toLocaleString('uk-UA')} кВт·год/рік (${covPct}% від вашого споживання)<br>
+  el.innerHTML = `<strong>${recommended} kWp</strong> — оптимум для вашого профілю<br>
+Денне споживання: ${dayPct}% · денний попит: ~${Math.round(daytimeDemand).toLocaleString('uk-UA')} кВт·год/рік<br>
+Прогнозна генерація: ~${genEst.toLocaleString('uk-UA')} кВт·год/рік (${covPct}% від споживання)<br>
 ≈ ${panels} панелей · ~${area} м² даху<br>
-<span style="color:var(--text-dim)">Покриття 70% — баланс між самоспоживанням і надлишковим експортом за низьким тарифом. Якщо є EV або тепловий насос — можна збільшити.</span>`;
+<span style="color:var(--text-dim)">${batNote}</span>`;
   el.classList.add('show');
 
   if (navigator.vibrate) navigator.vibrate(30);
